@@ -1,0 +1,23 @@
+{
+  "name": "pokemon-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that provides Pokémon stats and images using PokeAPI",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "axios": "^1.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.2"
+  },
+  "keywords": ["mcp", "pokemon", "pokeapi"],
+  "author": "",
+  "license": "MIT"
+}
