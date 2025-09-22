@@ -1,6 +1,9 @@
 # Claude configuration
 .claude/
 
+# Playwright MCP screenshots and data
+.playwright-mcp/
+
 # Node modules
 node_modules/
 
