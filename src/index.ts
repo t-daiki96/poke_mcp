@@ -6,6 +6,12 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 // ポケモンのステータス情報の型定義
 interface PokemonStats {
@@ -116,6 +122,34 @@ class PokemonMCPServer {
             required: ["pokemon"],
           },
         },
+        {
+          name: "get_pokemon_cry",
+          description: "ポケモンの鳴き声音声ファイルのURLを取得",
+          inputSchema: {
+            type: "object",
+            properties: {
+              pokemon: {
+                type: "string",
+                description: "ポケモン名またはID番号",
+              },
+            },
+            required: ["pokemon"],
+          },
+        },
+        {
+          name: "play_pokemon_cry",
+          description: "ポケモンの鳴き声を再生（音声ファイルをダウンロードして情報を返す）",
+          inputSchema: {
+            type: "object",
+            properties: {
+              pokemon: {
+                type: "string",
+                description: "ポケモン名またはID番号",
+              },
+            },
+            required: ["pokemon"],
+          },
+        },
       ],
     }));
 
@@ -134,6 +168,10 @@ class PokemonMCPServer {
         return await this.getPokemonImages(args.pokemon as string);
       } else if (name === "get_pokemon_info") {
         return await this.getPokemonInfo(args.pokemon as string);
+      } else if (name === "get_pokemon_cry") {
+        return await this.getPokemonCry(args.pokemon as string);
+      } else if (name === "play_pokemon_cry") {
+        return await this.playPokemonCry(args.pokemon as string);
       }
 
       throw new Error(`不明なツール: ${name}`);
@@ -229,6 +267,152 @@ class PokemonMCPServer {
           }
         ]
       };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `エラー: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+
+  // ポケモンの鳴き声音声ファイルのURLを取得するメソッド
+  private async getPokemonCry(pokemon: string) {
+    try {
+      const data = await this.fetchPokemonData(pokemon);
+
+      // 鳴き声ファイルのURL（PokeAPI/cries リポジトリから）
+      const cryUrl = `https://raw.githubusercontent.com/PokeAPI/cries/main/cries/pokemon/latest/${data.id}.ogg`;
+
+      // URLが有効かチェック
+      const response = await axios.head(cryUrl);
+      if (response.status !== 200) {
+        throw new Error(`鳴き声ファイルが見つかりません: ${cryUrl}`);
+      }
+
+      const cryInfo = {
+        name: data.name,
+        id: data.id,
+        cry_url: cryUrl,
+        format: "ogg",
+        source: "PokeAPI/cries repository"
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(cryInfo, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `エラー: ${error instanceof Error ? error.message : String(error)}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+
+  // ポケモンの鳴き声を再生するメソッド
+  private async playPokemonCry(pokemon: string) {
+    try {
+      const data = await this.fetchPokemonData(pokemon);
+
+      // 鳴き声ファイルのURL（PokeAPI/cries リポジトリから）
+      const cryUrl = `https://raw.githubusercontent.com/PokeAPI/cries/main/cries/pokemon/latest/${data.id}.ogg`;
+
+      // 一時ディレクトリとファイル名を作成
+      const tempDir = path.join(process.cwd(), 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const fileName = `${data.name}_cry.ogg`;
+      const filePath = path.join(tempDir, fileName);
+
+      // 音声ファイルをダウンロード
+      const response = await axios.get(cryUrl, { responseType: 'stream' });
+      const writer = fs.createWriteStream(filePath);
+      response.data.pipe(writer);
+
+      await new Promise<void>((resolve, reject) => {
+        writer.on('finish', () => resolve());
+        writer.on('error', reject);
+      });
+
+      // プラットフォームに応じて音声再生コマンドを選択
+      let playCommand: string;
+      const platform = process.platform;
+
+      if (platform === 'win32') {
+        // Windows: PowerShellでメディアプレイヤーを使用
+        playCommand = `powershell -c "(New-Object Media.SoundPlayer '${filePath}').PlaySync()"`;
+      } else if (platform === 'darwin') {
+        // macOS: afplayを使用
+        playCommand = `afplay "${filePath}"`;
+      } else {
+        // Linux: aplayまたはpaplayを使用
+        playCommand = `aplay "${filePath}" || paplay "${filePath}"`;
+      }
+
+      // 音声再生を実行
+      try {
+        await execAsync(playCommand);
+
+        // 再生後にファイルを削除
+        fs.unlinkSync(filePath);
+
+        const playInfo = {
+          name: data.name,
+          id: data.id,
+          cry_url: cryUrl,
+          status: "再生完了",
+          platform: platform,
+          file_saved_temporarily: filePath
+        };
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(playInfo, null, 2)
+            }
+          ]
+        };
+      } catch (playError) {
+        // 再生エラーの場合でもファイル情報は返す
+        const playInfo = {
+          name: data.name,
+          id: data.id,
+          cry_url: cryUrl,
+          status: "ダウンロード完了（再生エラー）",
+          platform: platform,
+          file_saved_at: filePath,
+          play_error: playError instanceof Error ? playError.message : String(playError),
+          manual_play_instructions: platform === 'win32'
+            ? "Windowsメディアプレーヤーまたは対応ソフトでファイルを開いてください"
+            : "音声プレーヤーでファイルを開いてください"
+        };
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(playInfo, null, 2)
+            }
+          ]
+        };
+      }
     } catch (error) {
       return {
         content: [
